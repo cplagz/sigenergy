@@ -1,0 +1,114 @@
+# sigenergy_pvoutput.yaml
+#
+# INSTALLATION
+# 1. Add this to configuration.yaml (once only, skip if already done):
+#      homeassistant:
+#        packages: !include_dir_named packages
+#
+# 2. Place this file at /config/packages/sigenergy_pvoutput.yaml
+#
+# 3. Add these two lines to /config/secrets.yaml:
+#      pvoutput_api_key: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+#      pvoutput_system_id: "123456"
+#    Get your values from: https://pvoutput.org/account.jsp
+#
+# 4. Check Config > Restart HA
+#
+# 5. Enable the automation "Update Sigenergy to PVOutput" in the UI
+#
+# SENSOR MAP
+#   v1 = Energy today (Wh)  <- sigen_plant_daily_pv_energy
+#   v2 = Power now (W)      <- sigen_plant_pv_power
+#   v3 = Consumption (Wh)   <- sigen_plant_daily_load_consumption
+#   v4 = Consuming (W)      <- sigen_plant_consumed_power
+
+template:
+  - sensor:
+      - name: "PVOutput Power Generation W"
+        unique_id: pvoutput_power_generation_w
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:solar-power
+        state: >
+          {{ (states('sensor.sigen_plant_pv_power') | float(0) * 1000) | round(0) | int }}
+
+      - name: "PVOutput Energy Today Wh"
+        unique_id: pvoutput_energy_today_wh
+        unit_of_measurement: "Wh"
+        device_class: energy
+        state_class: total_increasing
+        icon: mdi:solar-power-variant
+        state: >
+          {{ (states('sensor.sigen_plant_daily_pv_energy') | float(0) * 1000) | round(0) | int }}
+
+      - name: "PVOutput Power Consumption W"
+        unique_id: pvoutput_power_consumption_w
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:home-lightning-bolt
+        state: >
+          {{ (states('sensor.sigen_plant_consumed_power') | float(0) * 1000) | round(0) | int }}
+
+      - name: "PVOutput Consumption Today Wh"
+        unique_id: pvoutput_consumption_today_wh
+        unit_of_measurement: "Wh"
+        device_class: energy
+        state_class: total_increasing
+        icon: mdi:home-lightning-bolt-outline
+        state: >
+          {{ (states('sensor.sigen_plant_daily_load_consumption') | float(0) * 1000) | round(0) | int }}
+
+rest_command:
+  pvoutput_add_status:
+    url: "https://pvoutput.org/service/r2/addstatus.jsp"
+    method: POST
+    headers:
+      X-Pvoutput-Apikey: !secret pvoutput_api_key
+      X-Pvoutput-SystemId: !secret pvoutput_system_id
+    payload: "d={{ now().strftime('%Y%m%d') }}&t={{ now().strftime('%H:%M') }}&v1={{ states('sensor.pvoutput_energy_today_wh') }}&v2={{ states('sensor.pvoutput_power_generation_w') }}&v3={{ states('sensor.pvoutput_consumption_today_wh') }}&v4={{ states('sensor.pvoutput_power_consumption_w') }}"
+    content_type: "application/x-www-form-urlencoded"
+
+automation:
+  - alias: "Update Sigenergy to PVOutput"
+    id: update_sigenergy_to_pvoutput_pkg
+    description: "Pushes Sigenergy solar and consumption data to PVOutput every 5 minutes."
+    mode: single
+
+    trigger:
+      - platform: time_pattern
+        minutes: "/5"
+
+    condition:
+      - condition: time
+        after: "05:30:00"
+        before: "20:30:00"
+
+      - condition: state
+        entity_id: sensor.sigen_plant_plant_running_state
+        state: "Running"
+
+      - condition: template
+        value_template: >
+          {{ states('sensor.pvoutput_energy_today_wh') not in ['unknown', 'unavailable', 'none']
+          and states('sensor.pvoutput_power_generation_w') not in ['unknown', 'unavailable', 'none'] }}
+
+    action:
+      - service: rest_command.pvoutput_add_status
+        response_variable: pvoutput_response
+
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: "{{ pvoutput_response.status == 200 }}"
+            sequence:
+              - service: system_log.write
+                data:
+                  message: "PVOutput push OK | Gen: {{ states('sensor.pvoutput_power_generation_w') }}W | Today: {{ states('sensor.pvoutput_energy_today_wh') }}Wh | Load: {{ states('sensor.pvoutput_power_consumption_w') }}W"
+                  level: debug
+        default:
+          - service: system_log.write
+            data:
+              message: "PVOutput push FAILED | HTTP {{ pvoutput_response.status }} | {{ pvoutput_response.content }}"
+              level: warning
