@@ -76,6 +76,7 @@ Trigger it once manually to confirm it's working — check **Settings → Logs**
 
 | PVOutput | Label | Source entity | Notes |
 |---|---|---|---|
+| v6 | Grid Voltage | Average of `sensor.sigen_inverter_phase_a/b/c_voltage` | V |
 | v7 | Battery SoC | `sensor.sigen_plant_battery_state_of_charge` | % |
 | v8 | Battery Power | `sensor.sigen_plant_battery_power` | kW × 1000 → W, negative = discharging |
 | v9 | Grid Import | `sensor.sigen_plant_grid_import_power` | kW × 1000 → W |
@@ -91,6 +92,7 @@ In PVOutput go to **Settings → System → Edit → Extended Data** and configu
 
 | Field | Label | Unit | Axis | Credit/Debit |
 |---|---|---|---|---|
+| v6 | Grid Voltage | V | 1 (left) | None |
 | v7 | Battery SoC | % | 2 (right) | None |
 | v8 | Battery Power | W | 1 (left) | None |
 | v9 | Grid Import | W | 1 (left) | Debit |
@@ -151,6 +153,7 @@ Complete: 3312 points across 24 days pushed to PVOutput.
 ### Notes
 
 - **No credentials in the script** — API key and System ID are read from `/config/secrets.yaml`. Only the HA token is saved locally (in `.pvoutput_upload_config.json`, chmod 600)
+- **Two upload modes** — standard fields (v1-v4, v6) use the fast batch API (30 records per call). Extended fields (v7-v12) must use individual API calls due to a PVOutput batch API limitation — you will be warned of the estimated extra time before confirming
 - **Re-running is safe** — PVOutput overwrites existing entries rather than duplicating them
 - **Gaps in HA history** (e.g. after a restart) are skipped cleanly rather than uploading zeroes
 - A 2-second pause between each batch of 30 keeps the script within PVOutput's rate limits
