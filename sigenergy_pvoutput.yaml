@@ -12,29 +12,36 @@
 #      pvoutput_system_id: "123456"
 #    Get your values from: https://pvoutput.org/account.jsp
 #
-# 4. Check Config > Restart HA
+# 4. Check Config > Restart HA, then enable the automation in the UI.
 #
-# 5. Enable the automation "Update Sigenergy to PVOutput" in the UI
+# PVOUTPUT SYSTEM SETTINGS (Settings > System > Extended Data)
+# Configure these labels and units on the PVOutput website before use.
+# Donation Mode required for v7-v12:
 #
-# SENSOR MAP
-#   v1 = Energy today (Wh)  <- sigen_plant_daily_pv_energy
-#   v2 = Power now (W)      <- sigen_plant_pv_power
-#   v3 = Consumption (Wh)   <- sigen_plant_daily_load_consumption
-#   v4 = Consuming (W)      <- sigen_plant_consumed_power
+#   Field  Label              Unit   Axis   Graph
+#   v7     Battery SOC        %      Right  Line
+#   v8     Battery Power      W      Left   Line   (+ charge / - discharge)
+#   v9     Grid Import        W      Left   Bar
+#   v10    Grid Export        W      Left   Bar
+#   v11    Battery Temp       C      Right  Line
+#   v12    Inverter Temp      C      Right  Line
+#
+# FULL SENSOR MAP
+#   v1  = PV Energy today (Wh)      <- sigen_plant_daily_pv_energy
+#   v2  = PV Power now (W)          <- sigen_plant_pv_power
+#   v3  = Load Energy today (Wh)    <- sigen_plant_daily_load_consumption
+#   v4  = Load Power now (W)        <- sigen_plant_consumed_power
+#   v7  = Battery SOC (%)           <- sigen_plant_battery_state_of_charge
+#   v8  = Battery Power (W)         <- sigen_plant_battery_power
+#   v9  = Grid Import Power (W)     <- sigen_plant_grid_import_power
+#   v10 = Grid Export Power (W)     <- sigen_plant_grid_export_power
+#   v11 = Battery Temperature (C)   <- sigen_inverter_battery_average_cell_temperature
+#   v12 = Inverter Temperature (C)  <- sigen_inverter_pcs_internal_temperature
 
 template:
   - sensor:
-      - name: "PVOutput Power Generation W"
-        unique_id: pvoutput_power_generation_w
-        unit_of_measurement: "W"
-        device_class: power
-        state_class: measurement
-        icon: mdi:solar-power
-        state: >
-          {{ (states('sensor.sigen_plant_pv_power') | float(0) * 1000) | round(0) | int }}
-
-      - name: "PVOutput Energy Today Wh"
-        unique_id: pvoutput_energy_today_wh
+      - name: "PVOutput PV Energy Today Wh"
+        unique_id: pvoutput_pv_energy_today_wh
         unit_of_measurement: "Wh"
         device_class: energy
         state_class: total_increasing
@@ -42,8 +49,26 @@ template:
         state: >
           {{ (states('sensor.sigen_plant_daily_pv_energy') | float(0) * 1000) | round(0) | int }}
 
-      - name: "PVOutput Power Consumption W"
-        unique_id: pvoutput_power_consumption_w
+      - name: "PVOutput PV Power W"
+        unique_id: pvoutput_pv_power_w
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:solar-power
+        state: >
+          {{ (states('sensor.sigen_plant_pv_power') | float(0) * 1000) | round(0) | int }}
+
+      - name: "PVOutput Load Energy Today Wh"
+        unique_id: pvoutput_load_energy_today_wh
+        unit_of_measurement: "Wh"
+        device_class: energy
+        state_class: total_increasing
+        icon: mdi:home-lightning-bolt-outline
+        state: >
+          {{ (states('sensor.sigen_plant_daily_load_consumption') | float(0) * 1000) | round(0) | int }}
+
+      - name: "PVOutput Load Power W"
+        unique_id: pvoutput_load_power_w
         unit_of_measurement: "W"
         device_class: power
         state_class: measurement
@@ -51,14 +76,59 @@ template:
         state: >
           {{ (states('sensor.sigen_plant_consumed_power') | float(0) * 1000) | round(0) | int }}
 
-      - name: "PVOutput Consumption Today Wh"
-        unique_id: pvoutput_consumption_today_wh
-        unit_of_measurement: "Wh"
-        device_class: energy
-        state_class: total_increasing
-        icon: mdi:home-lightning-bolt-outline
+      - name: "PVOutput Battery SOC"
+        unique_id: pvoutput_battery_soc
+        unit_of_measurement: "%"
+        device_class: battery
+        state_class: measurement
+        icon: mdi:battery-charging-80
         state: >
-          {{ (states('sensor.sigen_plant_daily_load_consumption') | float(0) * 1000) | round(0) | int }}
+          {{ states('sensor.sigen_plant_battery_state_of_charge') | float(0) | round(1) }}
+
+      - name: "PVOutput Battery Power W"
+        unique_id: pvoutput_battery_power_w
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:battery-charging-100
+        state: >
+          {{ (states('sensor.sigen_plant_battery_power') | float(0) * 1000) | round(0) | int }}
+
+      - name: "PVOutput Grid Import Power W"
+        unique_id: pvoutput_grid_import_power_w
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:transmission-tower-export
+        state: >
+          {{ (states('sensor.sigen_plant_grid_import_power') | float(0) * 1000) | round(0) | int }}
+
+      - name: "PVOutput Grid Export Power W"
+        unique_id: pvoutput_grid_export_power_w
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        icon: mdi:transmission-tower-import
+        state: >
+          {{ (states('sensor.sigen_plant_grid_export_power') | float(0) * 1000) | round(0) | int }}
+
+      - name: "PVOutput Battery Temperature C"
+        unique_id: pvoutput_battery_temperature_c
+        unit_of_measurement: "C"
+        device_class: temperature
+        state_class: measurement
+        icon: mdi:thermometer
+        state: >
+          {{ states('sensor.sigen_inverter_battery_average_cell_temperature') | float(0) | round(1) }}
+
+      - name: "PVOutput Inverter Temperature C"
+        unique_id: pvoutput_inverter_temperature_c
+        unit_of_measurement: "C"
+        device_class: temperature
+        state_class: measurement
+        icon: mdi:thermometer
+        state: >
+          {{ states('sensor.sigen_inverter_pcs_internal_temperature') | float(0) | round(1) }}
 
 rest_command:
   pvoutput_add_status:
@@ -67,13 +137,13 @@ rest_command:
     headers:
       X-Pvoutput-Apikey: !secret pvoutput_api_key
       X-Pvoutput-SystemId: !secret pvoutput_system_id
-    payload: "d={{ now().strftime('%Y%m%d') }}&t={{ now().strftime('%H:%M') }}&v1={{ states('sensor.pvoutput_energy_today_wh') }}&v2={{ states('sensor.pvoutput_power_generation_w') }}&v3={{ states('sensor.pvoutput_consumption_today_wh') }}&v4={{ states('sensor.pvoutput_power_consumption_w') }}"
+    payload: "d={{ now().strftime('%Y%m%d') }}&t={{ now().strftime('%H:%M') }}&v1={{ states('sensor.pvoutput_pv_energy_today_wh') }}&v2={{ states('sensor.pvoutput_pv_power_w') }}&v3={{ states('sensor.pvoutput_load_energy_today_wh') }}&v4={{ states('sensor.pvoutput_load_power_w') }}&v7={{ states('sensor.pvoutput_battery_soc') }}&v8={{ states('sensor.pvoutput_battery_power_w') }}&v9={{ states('sensor.pvoutput_grid_import_power_w') }}&v10={{ states('sensor.pvoutput_grid_export_power_w') }}&v11={{ states('sensor.pvoutput_battery_temperature_c') }}&v12={{ states('sensor.pvoutput_inverter_temperature_c') }}"
     content_type: "application/x-www-form-urlencoded"
 
 automation:
   - alias: "Update Sigenergy to PVOutput"
     id: update_sigenergy_to_pvoutput_pkg
-    description: "Pushes Sigenergy solar and consumption data to PVOutput every 5 minutes."
+    description: "Pushes Sigenergy solar, battery, and grid data to PVOutput every 5 minutes."
     mode: single
 
     trigger:
@@ -91,8 +161,8 @@ automation:
 
       - condition: template
         value_template: >
-          {{ states('sensor.pvoutput_energy_today_wh') not in ['unknown', 'unavailable', 'none']
-          and states('sensor.pvoutput_power_generation_w') not in ['unknown', 'unavailable', 'none'] }}
+          {{ states('sensor.pvoutput_pv_energy_today_wh') not in ['unknown', 'unavailable', 'none']
+          and states('sensor.pvoutput_pv_power_w') not in ['unknown', 'unavailable', 'none'] }}
 
     action:
       - service: rest_command.pvoutput_add_status
@@ -105,7 +175,7 @@ automation:
             sequence:
               - service: system_log.write
                 data:
-                  message: "PVOutput push OK | Gen: {{ states('sensor.pvoutput_power_generation_w') }}W | Today: {{ states('sensor.pvoutput_energy_today_wh') }}Wh | Load: {{ states('sensor.pvoutput_power_consumption_w') }}W"
+                  message: "PVOutput OK | PV: {{ states('sensor.pvoutput_pv_power_w') }}W | Load: {{ states('sensor.pvoutput_load_power_w') }}W | Batt: {{ states('sensor.pvoutput_battery_soc') }}% {{ states('sensor.pvoutput_battery_power_w') }}W | Grid in: {{ states('sensor.pvoutput_grid_import_power_w') }}W out: {{ states('sensor.pvoutput_grid_export_power_w') }}W"
                   level: debug
         default:
           - service: system_log.write
