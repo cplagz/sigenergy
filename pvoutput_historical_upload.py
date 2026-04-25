@@ -45,40 +45,59 @@ START_DATE = "2026-04-20"
 END_DATE   = "2026-04-24"   # yesterday — today is handled by the live automation
 
 # Interval between uploaded data points in minutes (5 is PVOutput standard)
-INTERVAL_MINUTES = 5
-
-# Seconds to wait between batch API calls (be polite to PVOutput)
-RATE_LIMIT_SLEEP = 2
-
+INTERVAL_MINUTES = 5    # must match your PVOutput system interval setting
+RATE_LIMIT_SLEEP = 2    # seconds between batch API calls
+ 
 # =============================================================================
-# SENSORS — no need to change these if using the standard Sigenergy integration
+# SENSOR MAP
+# Standard fields
+#   v1 = PV energy today (kWh -> Wh)
+#   v2 = PV power now (kW -> W)
+#   v3 = Load energy today (kWh -> Wh)
+#   v4 = Load power now (kW -> W)
+# Extended fields (Donation Mode required)
+#   v7  = Battery SOC (%)
+#   v8  = Battery power (kW -> W, positive=charging, negative=discharging)
+#   v9  = Grid import power (kW -> W)
+#   v10 = Grid export power (kW -> W)
+#   v11 = Battery temperature (C)
+#   v12 = Inverter temperature (C)
 # =============================================================================
-
+ 
 SENSORS = {
-    "pv_power_kw":          "sensor.sigen_plant_pv_power",
-    "pv_energy_kwh":        "sensor.sigen_plant_daily_pv_energy",
-    "load_power_kw":        "sensor.sigen_plant_consumed_power",
-    "load_energy_kwh":      "sensor.sigen_plant_daily_load_consumption",
+    "pv_energy_kwh":    "sensor.sigen_plant_daily_pv_energy",
+    "pv_power_kw":      "sensor.sigen_plant_pv_power",
+    "load_energy_kwh":  "sensor.sigen_plant_daily_load_consumption",
+    "load_power_kw":    "sensor.sigen_plant_consumed_power",
+    "battery_soc":      "sensor.sigen_plant_battery_state_of_charge",
+    "battery_power_kw": "sensor.sigen_plant_battery_power",
+    "grid_import_kw":   "sensor.sigen_plant_grid_import_power",
+    "grid_export_kw":   "sensor.sigen_plant_grid_export_power",
+    "battery_temp_c":   "sensor.sigen_inverter_battery_average_cell_temperature",
+    "inverter_temp_c":  "sensor.sigen_inverter_pcs_internal_temperature",
 }
-
+ 
+# Which sensors need kW -> W conversion (multiply by 1000)
+KW_TO_W = {"pv_energy_kwh", "pv_power_kw", "load_energy_kwh", "load_power_kw",
+            "battery_power_kw", "grid_import_kw", "grid_export_kw"}
+ 
 # =============================================================================
 # HELPERS
 # =============================================================================
-
+ 
 HA_HEADERS = {
     "Authorization": f"Bearer {HA_TOKEN}",
     "Content-Type": "application/json",
 }
-
+ 
 PVO_HEADERS = {
     "X-Pvoutput-Apikey": PVOUTPUT_API_KEY,
     "X-Pvoutput-SystemId": PVOUTPUT_SYSTEM_ID,
     "Content-Type": "application/x-www-form-urlencoded",
 }
-
-
-def fetch_history(entity_id: str, start: datetime, end: datetime) -> list[dict]:
-    """Fetch state history for one entity from the HA REST API."""
+ 
+ 
+def fetch_history(entity_id, start, end):
     url = f"{HA_URL}/api/history/period/{start.isoformat()}"
     params = {
         "end_time": end.isoformat(),
@@ -88,50 +107,49 @@ def fetch_history(entity_id: str, start: datetime, end: datetime) -> list[dict]:
     }
     resp = requests.get(url, headers=HA_HEADERS, params=params, timeout=30)
     if resp.status_code != 200:
-        print(f"  ERROR fetching {entity_id}: HTTP {resp.status_code}")
+        print(f"    WARNING: Could not fetch {entity_id} (HTTP {resp.status_code})")
         return []
     data = resp.json()
     return data[0] if data else []
-
-
-def parse_states(raw_states: list[dict]) -> dict[datetime, float]:
-    """Convert raw HA state list into {datetime: float} mapping."""
+ 
+ 
+def parse_states(raw_states):
     result = {}
     for entry in raw_states:
         try:
             val = float(entry["state"])
             ts_str = entry.get("last_changed") or entry.get("last_updated")
-            # HA returns UTC ISO strings
             ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
             result[ts] = val
-        except (ValueError, KeyError):
+        except (ValueError, KeyError, TypeError):
             pass
     return result
-
-
-def resample(states: dict[datetime, float], slots: list[datetime]) -> dict[datetime, float | None]:
-    """For each 5-min slot, find the nearest recorded value (forward fill)."""
+ 
+ 
+def forward_fill(states, slots):
+    """For each slot, return the most recent reading at or before that time."""
     if not states:
         return {s: None for s in slots}
-
     sorted_ts = sorted(states.keys())
     result = {}
     idx = 0
-
     for slot in slots:
-        # Advance pointer to the last reading at or before this slot
         while idx + 1 < len(sorted_ts) and sorted_ts[idx + 1] <= slot:
             idx += 1
-        if sorted_ts[idx] <= slot:
-            result[slot] = states[sorted_ts[idx]]
-        else:
-            result[slot] = None
-
+        result[slot] = states[sorted_ts[idx]] if sorted_ts[idx] <= slot else None
     return result
-
-
-def push_batch(data_points: list[str]) -> bool:
-    """Push up to 30 data points to PVOutput batch API. Returns True on success."""
+ 
+ 
+def to_w(key, value):
+    """Convert kW to W for relevant sensors, round to int."""
+    if value is None:
+        return None
+    if key in KW_TO_W:
+        return int(round(value * 1000))
+    return round(value, 1)
+ 
+ 
+def push_batch(data_points):
     payload = "data=" + ";".join(data_points)
     resp = requests.post(
         "https://pvoutput.org/service/r2/addbatchstatus.jsp",
@@ -141,113 +159,106 @@ def push_batch(data_points: list[str]) -> bool:
     )
     if resp.status_code == 200:
         return True
-    print(f"  PVOutput error {resp.status_code}: {resp.text.strip()}")
+    print(f"    PVOutput error {resp.status_code}: {resp.text.strip()}")
     return False
-
-
-def upload_day(date: datetime.date) -> int:
-    """Fetch and upload one full day. Returns number of points pushed."""
-
+ 
+ 
+def upload_day(date):
     day_start = datetime(date.year, date.month, date.day, 0, 0, 0, tzinfo=timezone.utc)
     day_end   = day_start + timedelta(days=1) - timedelta(seconds=1)
-
-    # Build 5-minute time slots for the day
+ 
     slots = []
     slot = day_start
     while slot <= day_end:
         slots.append(slot)
         slot += timedelta(minutes=INTERVAL_MINUTES)
-
-    # Fetch all sensors
-    raw = {}
+ 
+    # Fetch and resample all sensors
+    sampled = {}
     for key, entity_id in SENSORS.items():
-        raw_states = fetch_history(entity_id, day_start, day_end)
-        raw[key] = parse_states(raw_states)
-
-    # Resample each sensor to our 5-min slots
-    sampled = {key: resample(states, slots) for key, states in raw.items()}
-
-    # Build PVOutput data strings
-    # Format per point: YYYYMMDD,HH:MM,v1,v2,v3,v4
-    #   v1 = energy generated today (Wh) — cumulative
-    #   v2 = power generating now (W)
-    #   v3 = energy consumed today (Wh) — cumulative
-    #   v4 = power consuming now (W)
+        raw = fetch_history(entity_id, day_start, day_end)
+        states = parse_states(raw)
+        sampled[key] = forward_fill(states, slots)
+ 
     data_points = []
-
     for slot in slots:
-        pv_energy  = sampled["pv_energy_kwh"][slot]
-        pv_power   = sampled["pv_power_kw"][slot]
-        ld_energy  = sampled["load_energy_kwh"][slot]
-        ld_power   = sampled["load_power_kw"][slot]
-
-        # Skip slots with no data at all
-        if all(v is None for v in [pv_energy, pv_power, ld_energy, ld_power]):
+        vals = {key: to_w(key, sampled[key][slot]) for key in SENSORS}
+ 
+        # Skip slots where we have no generation data at all
+        if vals["pv_energy_kwh"] is None and vals["pv_power_kw"] is None:
             continue
-
-        # PVOutput wants integers in W / Wh; use empty string for missing fields
-        v1 = str(int(round(pv_energy * 1000))) if pv_energy is not None else ""
-        v2 = str(int(round(pv_power  * 1000))) if pv_power  is not None else ""
-        v3 = str(int(round(ld_energy * 1000))) if ld_energy is not None else ""
-        v4 = str(int(round(ld_power  * 1000))) if ld_power  is not None else ""
-
-        # Local time string for PVOutput (it stores in your system timezone)
-        # PVOutput expects local time — convert from UTC using local offset
+ 
         local_slot = slot.astimezone()
         date_str = local_slot.strftime("%Y%m%d")
         time_str = local_slot.strftime("%H:%M")
-
-        data_points.append(f"{date_str},{time_str},{v1},{v2},{v3},{v4}")
-
+ 
+        def f(v):
+            return str(v) if v is not None else ""
+ 
+        # Standard fields
+        v1  = f(vals["pv_energy_kwh"])
+        v2  = f(vals["pv_power_kw"])
+        v3  = f(vals["load_energy_kwh"])
+        v4  = f(vals["load_power_kw"])
+        # Extended fields
+        v7  = f(vals["battery_soc"])
+        v8  = f(vals["battery_power_kw"])
+        v9  = f(vals["grid_import_kw"])
+        v10 = f(vals["grid_export_kw"])
+        v11 = f(vals["battery_temp_c"])
+        v12 = f(vals["inverter_temp_c"])
+ 
+        # Format: date,time,v1,v2,v3,v4,,,v7,v8,v9,v10,v11,v12
+        # v5 and v6 are efficiency and temperature (unused), so leave blank
+        data_points.append(f"{date_str},{time_str},{v1},{v2},{v3},{v4},,,{v7},{v8},{v9},{v10},{v11},{v12}")
+ 
     if not data_points:
         print(f"  {date}: no data found, skipping.")
         return 0
-
-    # Push in batches of 30 (PVOutput limit)
+ 
     total_pushed = 0
     for i in range(0, len(data_points), 30):
         batch = data_points[i:i + 30]
-        ok = push_batch(batch)
-        if ok:
+        if push_batch(batch):
             total_pushed += len(batch)
         sleep(RATE_LIMIT_SLEEP)
-
+ 
     return total_pushed
-
-
+ 
+ 
 # =============================================================================
 # MAIN
 # =============================================================================
-
+ 
 def main():
     print("=" * 60)
-    print("  Sigenergy → PVOutput Historical Upload")
+    print("  Sigenergy -> PVOutput Historical Upload (with extended data)")
     print("=" * 60)
-
-    # Validate config
+ 
     if "YOUR_" in HA_TOKEN or "YOUR_" in PVOUTPUT_API_KEY:
-        print("\nERROR: Please fill in your HA token and PVOutput credentials in the CONFIG section.")
+        print("\nERROR: Fill in your credentials in the CONFIG section.")
         sys.exit(1)
-
+ 
     start = datetime.strptime(START_DATE, "%Y-%m-%d").date()
     end   = datetime.strptime(END_DATE,   "%Y-%m-%d").date()
-
-    print(f"\nUploading {START_DATE} to {END_DATE} in {INTERVAL_MINUTES}-minute intervals.\n")
-
-    total_days   = 0
-    total_points = 0
+ 
+    print(f"\nRange  : {START_DATE} to {END_DATE}")
+    print(f"Fields : v1-v4 (standard) + v7-v12 (extended)")
+    print(f"Interval: every {INTERVAL_MINUTES} minutes\n")
+ 
+    total_days = total_points = 0
     current = start
-
+ 
     while current <= end:
-        print(f"Processing {current} ...", end=" ", flush=True)
+        print(f"  {current} ... ", end="", flush=True)
         pushed = upload_day(current)
         print(f"{pushed} points uploaded.")
         total_points += pushed
         total_days   += 1
         current += timedelta(days=1)
-
-    print(f"\nDone. {total_points} data points across {total_days} days uploaded to PVOutput.")
-
-
+ 
+    print(f"\nComplete: {total_points} points across {total_days} days pushed to PVOutput.")
+ 
+ 
 if __name__ == "__main__":
     main()
