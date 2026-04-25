@@ -115,28 +115,20 @@ From the HA Terminal addon:
 pip install requests
 ```
 
-### 2. Edit the CONFIG section
-
-Open the script and fill in the top section:
-
-```python
-HA_URL     = "http://localhost:8123"
-HA_TOKEN   = "YOUR_LONG_LIVED_TOKEN"   # HA > Profile > Long-Lived Access Tokens
-
-PVOUTPUT_API_KEY   = "YOUR_PVOUTPUT_API_KEY"
-PVOUTPUT_SYSTEM_ID = "YOUR_PVOUTPUT_SYSTEM_ID"
-
-START_DATE = "2026-04-01"   # first day to upload
-END_DATE   = "2026-04-24"   # last day (use yesterday; today is handled by the automation)
-```
-
-To generate a Long-Lived Access Token: **Profile → Long-Lived Access Tokens → Create Token**.
-
-### 3. Run it
+### 2. Run it
 
 ```bash
 python3 pvoutput_historical_upload.py
 ```
+
+On first run the script will:
+
+1. **Read** `pvoutput_api_key` and `pvoutput_system_id` directly from `/config/secrets.yaml` — no editing the script needed
+2. **Prompt** for your HA Long-Lived Access Token (Profile → Long-Lived Access Tokens → Create Token)
+3. **Prompt** for a start and end date
+4. **Save** the token and dates to `.pvoutput_upload_config.json` next to the script
+
+On subsequent runs, saved values are shown as defaults — just press Enter to reuse them or type new ones.
 
 Output looks like:
 
@@ -158,6 +150,7 @@ Complete: 3312 points across 24 days pushed to PVOutput.
 
 ### Notes
 
+- **No credentials in the script** — API key and System ID are read from `/config/secrets.yaml`. Only the HA token is saved locally (in `.pvoutput_upload_config.json`, chmod 600)
 - **Re-running is safe** — PVOutput overwrites existing entries rather than duplicating them
 - **Gaps in HA history** (e.g. after a restart) are skipped cleanly rather than uploading zeroes
 - A 2-second pause between each batch of 30 keeps the script within PVOutput's rate limits
